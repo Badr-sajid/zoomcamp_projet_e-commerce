@@ -1,0 +1,63 @@
+id: gcp-kaggle-ingestion
+namespace: zoomcamp
+
+inputs:
+  - id: dataset
+    type: SELECT
+    displayName: select dataset
+    values: [customers, geolocation, order_items, order_payments, order_reviews, orders, products, sellers, product_category_name_translation]
+    defaults: customers
+
+variables:
+  file: "olist_{{inputs.dataset}}_dataset.csv"
+  zip: "olist_{{inputs.dataset}}_dataset.zip"
+  gcs_file: "gs://{{kv('GCP_BUCKET_NAME')}}/{{vars.file}}"
+  table: "{{kv('GCP_DATASET')}}.{{inputs.dataset}}"
+  data: " {{ outputs.unzip_dataset.files[\"olist_customers_dataset.csv\"] }}"
+
+tasks:
+  - id: set_label
+    type: io.kestra.plugin.core.execution.Labels
+    labels:
+      file: "{{render(vars.file)}}"
+      dataset: "{{inputs.dataset}}" 
+
+  # 1. Extraction (Appel HTTP avec authentification)
+  #- id: extract
+  #  type: io.kestra.plugin.scripts.shell.Commands
+  #  outputFiles:
+  #    - "*.zip"
+  #  taskRunner:
+  #    type: io.kestra.plugin.core.runner.Process
+  #  commands: 
+  #    - curl -L -o {{render(vars.zip)}} https://www.kaggle.com/api/v1/datasets/download/olistbr/brazilian-ecommerce/{{render(vars.file)}}
+
+  - id: download_kaggle_zip
+    type: io.kestra.plugin.fs.http.Download
+    description: Téléchargement via l'API REST de Kaggle
+    # L'URL REST standard de Kaggle pour les datasets
+    uri: https://www.kaggle.com/api/v1/datasets/download/olistbr/brazilian-ecommerce/{{render(vars.file)}}
+
+
+  # 2. Décompression (L'API Kaggle renvoie toujours un fichier .zip)
+  - id: unzip_dataset
+    type: io.kestra.plugin.compress.ArchiveDecompress
+    description: Extraction du CSV depuis le ZIP
+    # On récupère dynamiquement le fichier téléchargé à l'étape précédente
+    from: "{{ outputs.download_kaggle_zip.uri }}"
+    algorithm: ZIP
+
+
+  - id: upload_to_gcs
+    type: io.kestra.plugin.gcp.gcs.Upload
+    from: "{{ outputs.unzip_dataset.files.values() | first }}"
+    to: "{{render(vars.gcs_file)}}"
+  
+
+pluginDefaults:
+  - type: io.kestra.plugin.gcp
+    values:
+      serviceAccount: "{{secret('GCP_SERVICE_ACCOUNT')}}"
+      projectId: "{{kv('GCP_PROJECT_ID')}}"
+      location: "{{kv('GCP_LOCATION')}}"
+      bucket: "{{kv('GCP_BUCKET_NAME')}}"
