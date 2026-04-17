@@ -5,54 +5,57 @@ inputs:
   - id: dataset
     type: SELECT
     displayName: select dataset
-    values: [customers, geolocation, order_items, order_payments, order_reviews, orders, products, sellers, product_category_name_translation]
-    defaults: customers
+    values: [ olist_customers_dataset, olist_geolocation_dataset, olist_order_items_dataset, olist_order_payments_dataset, olist_order_reviews_dataset, olist_orders_dataset, olist_products_dataset, olist_sellers_dataset, product_category_name_translation ]
+    defaults: olist_customers_dataset
 
 variables:
-  file: "olist_{{inputs.dataset}}_dataset.csv"
-  zip: "olist_{{inputs.dataset}}_dataset.zip"
-  gcs_file: "gs://{{kv('GCP_BUCKET_NAME')}}/{{vars.file}}"
+  file: "{{inputs.dataset}}.csv" 
+  parquet_file: "{{inputs.dataset}}.parquet" 
+  gcs_file: "gs://{{kv('GCP_BUCKET_NAME')}}/{{vars.parquet_file}}"
   table: "{{kv('GCP_DATASET')}}.{{inputs.dataset}}"
-  data: " {{ outputs.unzip_dataset.files[\"olist_customers_dataset.csv\"] }}"
 
 tasks:
   - id: set_label
     type: io.kestra.plugin.core.execution.Labels
     labels:
       file: "{{render(vars.file)}}"
-      dataset: "{{inputs.dataset}}" 
-
-  # 1. Extraction (Appel HTTP avec authentification)
-  #- id: extract
-  #  type: io.kestra.plugin.scripts.shell.Commands
-  #  outputFiles:
-  #    - "*.zip"
-  #  taskRunner:
-  #    type: io.kestra.plugin.core.runner.Process
-  #  commands: 
-  #    - curl -L -o {{render(vars.zip)}} https://www.kaggle.com/api/v1/datasets/download/olistbr/brazilian-ecommerce/{{render(vars.file)}}
+      dataset: "{{inputs.dataset}}"
 
   - id: download_kaggle_zip
-    type: io.kestra.plugin.fs.http.Download
+    type: io.kestra.plugin.core.http.Download
     description: Téléchargement via l'API REST de Kaggle
-    # L'URL REST standard de Kaggle pour les datasets
     uri: https://www.kaggle.com/api/v1/datasets/download/olistbr/brazilian-ecommerce/{{render(vars.file)}}
 
-
-  # 2. Décompression (L'API Kaggle renvoie toujours un fichier .zip)
   - id: unzip_dataset
     type: io.kestra.plugin.compress.ArchiveDecompress
     description: Extraction du CSV depuis le ZIP
-    # On récupère dynamiquement le fichier téléchargé à l'étape précédente
     from: "{{ outputs.download_kaggle_zip.uri }}"
     algorithm: ZIP
 
+  - id: convert_to_parquet
+    type: io.kestra.plugin.jdbc.duckdb.Query
+    inputFiles:
+      data.csv: "{{ outputs.unzip_dataset.files.values() | first }}"
+    outputFiles:
+      - output.parquet
+    sql: |
+      COPY (SELECT * FROM read_csv_auto('data.csv')) 
+      TO 'output.parquet' (FORMAT PARQUET);
+    fetch: false
 
   - id: upload_to_gcs
     type: io.kestra.plugin.gcp.gcs.Upload
-    from: "{{ outputs.unzip_dataset.files.values() | first }}"
+    from: "{{ outputs.convert_to_parquet.outputFiles['output.parquet'] }}"
     to: "{{render(vars.gcs_file)}}"
-  
+
+  #- id: clone_repo
+  #  type: io.kestra.plugin.git.Clone
+  #  url: https://github.com/votre-compte/vos-scripts-sql.git
+  #  branch: main
+
+  #- id: bq_green_create_table
+  #  type: io.kestra.plugin.gcp.bigquery.Query
+  #  sql: "{{ outputs.clone_repo.files['requete_maj.sql'] }}"
 
 pluginDefaults:
   - type: io.kestra.plugin.gcp
