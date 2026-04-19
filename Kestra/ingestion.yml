@@ -11,8 +11,10 @@ inputs:
 variables:
   file: "{{inputs.dataset}}.csv" 
   parquet_file: "{{inputs.dataset}}.parquet" 
-  gcs_file: "gs://{{kv('GCP_BUCKET_NAME')}}/{{vars.parquet_file}}"
+  gcs_file: "gs://{{kv('GCP_BUCKET_NAME')}}/{{vars.file}}"
   table: "{{kv('GCP_DATASET')}}.{{inputs.dataset}}"
+  data: "{{outputs.unzip_dataset.files[inputs.dataset.csv']}}"
+  
 
 tasks:
   - id: set_label
@@ -24,34 +26,26 @@ tasks:
   - id: download_kaggle_zip
     type: io.kestra.plugin.core.http.Download
     description: Téléchargement via l'API REST de Kaggle
+    # L'URL REST standard de Kaggle pour les datasets
     uri: https://www.kaggle.com/api/v1/datasets/download/olistbr/brazilian-ecommerce/{{render(vars.file)}}
 
+  # 2. Décompression (L'API Kaggle renvoie toujours un fichier .zip)
   - id: unzip_dataset
     type: io.kestra.plugin.compress.ArchiveDecompress
     description: Extraction du CSV depuis le ZIP
+    # On récupère dynamiquement le fichier téléchargé à l'étape précédente
     from: "{{ outputs.download_kaggle_zip.uri }}"
     algorithm: ZIP
 
-  - id: convert_to_parquet
-    type: io.kestra.plugin.jdbc.duckdb.Query
-    inputFiles:
-      data.csv: "{{ outputs.unzip_dataset.files.values() | first }}"
-    outputFiles:
-      - output.parquet
-    sql: |
-      COPY (SELECT * FROM read_csv_auto('data.csv')) 
-      TO 'output.parquet' (FORMAT PARQUET);
-    fetch: false
-
   - id: upload_to_gcs
     type: io.kestra.plugin.gcp.gcs.Upload
-    from: "{{ outputs.convert_to_parquet.outputFiles['output.parquet'] }}"
+    from: "{{ outputs.unzip_dataset.files[\"olist_customers_dataset.csv\"] }}"
     to: "{{render(vars.gcs_file)}}"
 
-  #- id: clone_repo
-  #  type: io.kestra.plugin.git.Clone
-  #  url: https://github.com/votre-compte/vos-scripts-sql.git
-  #  branch: main
+  - id: clone_repo
+    type: io.kestra.plugin.git.Clone
+    url: https://github.com/votre-compte/vos-scripts-sql.git
+    branch: main
 
   #- id: bq_green_create_table
   #  type: io.kestra.plugin.gcp.bigquery.Query
